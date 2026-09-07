@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="220" viewBox="0 0 360 220">
+  <rect width="360" height="220" fill="#ffffff"/>
+  <circle cx="180" cy="92" r="58" fill="#ffffff" stroke="#d62828" stroke-width="12"/>
+  <line x1="139" y1="133" x2="221" y2="51" stroke="#d62828" stroke-width="12" stroke-linecap="round"/>
+  <text x="180" y="185" text-anchor="middle" font-family="sans-serif" font-size="24" font-weight="bold" fill="#222222">Acceso bloqueado</text>
+</svg>
