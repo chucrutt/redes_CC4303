@@ -1,2 +1,14 @@
 __pycache__/
 *.pyc
+# LaTeX
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.out
+*.synctex.gz
+
+# Material del curso y documentos personales
+eol/
+docs/
+ejemplos/

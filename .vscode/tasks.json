@@ -1,0 +1,29 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Informe Stop & Wait (auto)",
+      "type": "shell",
+      "command": "latexmk -pdf -pvc -view=none -interaction=nonstopmode informe.tex",
+      "options": { "cwd": "${workspaceFolder}/actividades/TCP/informe" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "dedicated" }
+    },
+    {
+      "label": "Informe Control de Congestión (auto)",
+      "type": "shell",
+      "command": "latexmk -pdf -pvc -view=none -interaction=nonstopmode informe.tex",
+      "options": { "cwd": "${workspaceFolder}/actividades/ControlCongestion/informe" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "dedicated" }
+    },
+    {
+      "label": "Informes: recompilar al guardar",
+      "dependsOn": ["Informe Stop & Wait (auto)", "Informe Control de Congestión (auto)"],
+      "problemMatcher": [],
+      "runOptions": { "runOn": "folderOpen" }
+    }
+  ]
+}

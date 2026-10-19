@@ -1,0 +1,5 @@
+Redes CC4303 - Actividad Stop & Wait.
+Este archivo tiene bastante más de 16 bytes, por lo que el cliente
+debe dividirlo en varios segmentos y el servidor debe rearmarlo
+de forma íntegra incluso cuando se pierden segmentos o ACKs.
+Áéíóú ñ: también se prueban caracteres UTF-8 de más de un byte.

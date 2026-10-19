@@ -1,0 +1,566 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage{spectral}
+\usepackage[margin=2.5cm,headheight=48pt,headsep=18pt]{geometry}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\pgfplotsset{compat=1.18}
+
+\newcommand{\curso}{CC4303-1 Redes}
+\newcommand{\tituloinforme}{Actividad: Control de congestión}
+
+\renewcommand{\sectionmark}[1]{\markboth{#1}{}}
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+
+% Cabecera y pie de página con el mismo estilo del informe de práctica.
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\leftmark}
+\fancyfoot[L]{\small Informe \tituloinforme}
+\fancyfoot[R]{\small CC4303-1}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+\fancypagestyle{portada}{%
+  \fancyhf{}
+  \fancyhead[L]{\small\begin{tabular}[b]{@{}l@{}}
+    Universidad de Chile\\
+    Facultad de Ciencias Físicas y Matemáticas\\
+    Departamento de Ciencias de la Computación\\
+    \curso
+  \end{tabular}}
+  \fancyhead[R]{\includegraphics[height=1.3cm]{logo_fcfm.png}}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+
+\definecolor{fondocodigo}{gray}{0.96}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{fondocodigo},
+  frame=single,
+  rulecolor=\color{gray!50},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {Á}{{\'A}}1 {ñ}{{\~n}}1
+}
+
+\begin{document}
+
+\begin{titlepage}
+  \thispagestyle{portada}
+  \centering
+  \vspace*{5cm}
+  {\LARGE Informe\par}
+  \vspace{0.3cm}
+  {\Large \tituloinforme\par}
+  \vspace{0.4cm}
+  {\large Juan Pablo Bustamante Flaño\par}
+  \vfill
+  Correo electrónico: juan.bustamante.f@ug.uchile.cl\\
+  Curso: \curso{} --- Primavera 2026\\
+  Profesora: Ivana Bachmann\\
+  Módulo 3: Protocolos de transporte, semanas 8-10\\
+  Fecha: 19/10/2026
+  \vspace*{3cm}
+\end{titlepage}
+
+\section{Introducción}
+
+En esta actividad se extendió el TCP simplificado de la actividad de Stop \& Wait con
+Go-Back-N y con control de congestión basado en TCP Tahoe (solo slow start y congestion
+avoidance). El trabajo se hizo sobre una copia del código anterior.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+  \toprule
+  Archivo & Contenido \\
+  \midrule
+  \texttt{CongestionControl.py} & Clase \texttt{CongestionControl} (parte 1). \\
+  \texttt{SocketTCP.py} & \texttt{SocketTCP} con Stop \& Wait y Go-Back-N (partes 2 y 3). \\
+  \texttt{socketUDP.py}, \texttt{slidingWindowCC.py} & Sin modificar. \\
+  \texttt{CongestionControl\_test.py} & Sin modificar. \\
+  \texttt{cliente.py}, \texttt{servidor.py} & Cliente y servidor de prueba. \\
+  \texttt{test\_cliente.py}, \texttt{test\_servidor.py} & Pruebas de \texttt{send}/\texttt{recv} de la actividad anterior. \\
+  \texttt{experimento.sh} & Comparación con y sin control de congestión. \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Uso:
+
+\begin{lstlisting}
+% python3 servidor.py localhost 8000 [stop_and_wait|go_back_n] > recibido.txt
+% python3 cliente.py localhost 8000 [stop_and_wait|go_back_n] [--sin-cc] < archivo.txt
+\end{lstlisting}
+
+El modo por defecto es \texttt{go\_back\_n} con control de congestión activado. La
+opción \texttt{-{}-sin-cc} lo desactiva. El cliente informa en \texttt{stderr} el tiempo
+que tomó \texttt{send} y la cantidad de segmentos enviados. El timeout
+(\texttt{TIMEOUT = 1.5}) y el modo debug (\texttt{DEBUG = True}) son variables globales
+al comienzo de \texttt{SocketTCP.py}. El header de los segmentos es el mismo de la actividad anterior:
+texto con el formato \texttt{SYN|ACK|FIN|SEQ|} y \texttt{SEQ} de 10 dígitos (17 bytes).
+
+\section{Parte 1: clase \texttt{CongestionControl}}
+
+El constructor \texttt{CongestionControl(MSS)} inicializa \texttt{current\_state} en slow
+start, \texttt{cwnd} en 1 MSS y \texttt{ssthresh} en \texttt{None}. Las funciones son:
+
+\begin{itemize}[nosep]
+  \item \texttt{get\_cwnd()}: tamaño de la ventana en bytes.
+  \item \texttt{get\_MSS\_in\_cwnd()}: cantidad de MSS completos en \texttt{cwnd}
+        ($\lfloor \texttt{cwnd}/\texttt{MSS} \rfloor$; con 17 bytes y MSS = 4 retorna 4).
+  \item \texttt{event\_ack\_received()}: en slow start suma 1 MSS y, si
+        \texttt{ssthresh} ya está definido y \texttt{cwnd >= ssthresh}, pasa a congestion
+        avoidance. En congestion avoidance suma
+        $\texttt{MSS}/\texttt{get\_MSS\_in\_cwnd()}$, es decir, 1 MSS por cada ventana
+        completa de ACKs (Additive Increase).
+  \item \texttt{event\_timeout()}: en ambos estados fija
+        \texttt{ssthresh = int(cwnd/2)}, deja \texttt{cwnd} en 1 MSS y vuelve a slow start
+        (Multiplicative Decrease).
+  \item \texttt{is\_state\_slow\_start()}, \texttt{is\_state\_congestion\_avoidance()} y
+        \texttt{get\_ssthresh()}.
+\end{itemize}
+
+\textbf{Decisiones de diseño.}
+\begin{itemize}[nosep]
+  \item En congestion avoidance \texttt{cwnd} suma fracciones de MSS (por ejemplo,
+        $8/3$), así que deja de ser entero y se guarda como \texttt{float}. Con números de
+        punto flotante, la suma de tres incrementos de $8/3$ puede quedar en
+        $31{,}999\ldots$ en vez de 32, y \texttt{get\_MSS\_in\_cwnd()} entregaría un MSS
+        menos. Para evitarlo, el cociente se redondea a 6 decimales antes de truncarlo:
+        \texttt{int(round(cwnd / MSS, 6))}.
+  \item \texttt{ssthresh} se trunca a entero (con el mismo redondeo previo), que es lo que
+        espera el test de u-cursos (\texttt{int(5/2*MSS)}).
+  \item El cambio de estado se revisa solo al aumentar \texttt{cwnd}, como indica el
+        paso 4. Por eso, después de un timeout con \texttt{cwnd} = 1 MSS, el
+        \texttt{ssthresh} queda en $\texttt{MSS}/2$ y el primer ACK lleva directamente a
+        congestion avoidance.
+\end{itemize}
+
+\textbf{Test.} \texttt{CongestionControl\_test.py} pasó con MSS = 7 (el valor del
+archivo) y también con 1, 3, 8 y 13:
+
+\begin{lstlisting}
+% python3 CongestionControl_test.py
+Initial test passed
+ACK test passed
+Timeout test passed
+ssthresh test passed
+Timeout test 2 passed
+\end{lstlisting}
+
+\section{Parte 2: Go-Back-N}
+
+\subsection{Preguntas previas}
+
+\textbf{(1) ¿Por qué sirve el código de Stop \& Wait como base para Go-Back-N? ¿Qué
+similitud tienen?} Stop \& Wait es un caso particular de Go-Back-N con ventana de tamaño
+1. Ambos usan un solo timer, ACKs acumulativos (el ACK indica el siguiente byte esperado)
+y la misma reacción ante un timeout: retransmitir todo lo enviado que aún no está
+confirmado. El código de ejemplo ya usa \texttt{SlidingWindowCC} con ventana 1 y el timer
+de \texttt{SocketUDP}. Para pasar a Go-Back-N basta con agrandar la ventana, enviar todos
+sus elementos, avanzarla según el ACK acumulado y reenviar la ventana completa cuando
+vence el timer.
+
+\textbf{(2) ¿Qué pasa con \texttt{recv}? ¿Cambia al usar \texttt{SocketUDP} y
+\texttt{SlidingWindowCC}?} En Go-Back-N el receptor no cambia respecto de Stop \& Wait.
+Acepta solo el segmento cuyo \texttt{seq} es el esperado, descarta los repetidos o fuera de
+orden y siempre responde con el ACK acumulado. No guarda segmentos fuera de orden (a
+diferencia de Selective Repeat), así que no necesita una ventana. Tampoco necesita
+timers, porque el receptor nunca retransmite. Por eso \texttt{recv\_using\_go\_back\_n}
+llama a la misma lógica que \texttt{recv\_using\_stop\_and\_wait}. Mi receptor de Stop \&
+Wait ya reenviaba el ACK acumulado ante cualquier segmento de datos inesperado, así que
+sirve sin cambios. Lo único que cambia es el socket: ahora se recibe con
+\texttt{SocketUDP}.
+
+\subsection{Uso de \texttt{SocketUDP} y \texttt{SlidingWindowCC}}
+
+Ambas clases se importan tal como vienen de u-cursos y se usan solo a través de sus
+funciones documentadas (\texttt{settimeout}, \texttt{set\_timer\_list\_length},
+\texttt{sendto}, \texttt{recvfrom}, \texttt{stop\_timer} y \texttt{close}; y en la
+ventana, \texttt{get\_data}, \texttt{get\_sequence\_number}, \texttt{move\_window} y
+\texttt{update\_window\_size}). Toda la comunicación de \texttt{SocketTCP} (handshake,
+Stop \& Wait, Go-Back-N y cierre) pasa ahora por \texttt{SocketUDP}, siguiendo el ejemplo
+de Stop \& Wait de la sección \emph{SocketUDP y SlidingWindowCC}: se envía con
+\texttt{sendto}, se espera con \texttt{recvfrom} dentro de un \texttt{try} y, al recibir
+el ACK válido, se detiene el timer con \texttt{stop\_timer}. Usar esta clase obligó a
+tomar dos decisiones:
+
+\begin{itemize}[nosep]
+  \item \textbf{Un segundo timer para los ACK.} \texttt{sendto} inicia el timer indicado
+        en cada envío. Si un ACK usara el timer 0, más adelante lanzaría un
+        \texttt{TimeoutError} falso, aunque un ACK no espera respuesta. Por eso se usan
+        dos timers (\texttt{set\_timer\_list\_length(2)}): el timer 0 para los segmentos
+        que esperan respuesta (datos, \texttt{SYN}, \texttt{SYN+ACK}, \texttt{FIN} y
+        \texttt{FIN+ACK}) y el timer 1 para los ACK, que se detiene con
+        \texttt{stop\_timer(1)} justo después de enviarlos.
+  \item \textbf{Detener el timer antes de reiniciarlo.} \texttt{SocketUDP} usa
+        \texttt{threading.Timer}, que no se puede iniciar dos veces. Si el timer venció y
+        se vuelve a llamar a \texttt{sendto} sin \texttt{stop\_timer}, se lanza
+        \texttt{RuntimeError}. Por eso, después de cada \texttt{TimeoutError} y antes de
+        cada retransmisión, se llama a \texttt{stop\_timer(0)}. Además, \texttt{stop\_timer}
+        falla si el timer no existe, así que \texttt{SocketTCP} guarda en
+        \texttt{data\_timer\_on} si el timer 0 está activo y solo lo detiene en ese caso.
+        Por la misma razón, mientras se espera un ACK no se reenvía nada ante segmentos
+        inesperados: solo se retransmite después de un timeout.
+\end{itemize}
+
+\subsection{Funciones \texttt{send} y \texttt{recv}}
+
+El código anterior se movió a \texttt{send\_using\_stop\_and\_wait} y
+\texttt{recv\_using\_stop\_and\_wait}. \texttt{send(message, mode)} y
+\texttt{recv(buff\_size, mode)} eligen la implementación con \texttt{mode}, que acepta
+\texttt{"stop\_and\_wait"} (por defecto) o \texttt{"go\_back\_n"}.
+
+\texttt{send\_using\_go\_back\_n(message)} funciona así:
+
+\begin{enumerate}[nosep]
+  \item Arma \texttt{data\_list} con el largo del mensaje seguido del mensaje en trozos de
+        MSS = 8 bytes, y crea la ventana \texttt{SlidingWindowCC(window\_size, data\_list,
+        self.seq)}.
+  \item Envía todos los elementos de la ventana. El timer parte con el primero.
+  \item Espera un ACK válido, es decir, con \texttt{seq} mayor que el del primer elemento
+        de la ventana y menor o igual que el final del mensaje. Los ACK repetidos se
+        ignoran.
+  \item Con un ACK válido, avanza la ventana en la cantidad de elementos que confirma y
+        envía seguidos los elementos que entraron a ella. Si hubo envíos nuevos, el timer
+        se reinicia; si no, sigue corriendo para cubrir los segmentos que todavía no se
+        confirman.
+  \item Si vence el timer, reenvía la ventana completa.
+\end{enumerate}
+
+Para saber qué elementos de la ventana todavía no se envían, se guarda el \texttt{seq}
+siguiente al último segmento enviado.
+
+\textbf{Test sin pérdida.} Las pruebas de la actividad anterior (con el test 4 de
+$2n = 42$ bytes y \texttt{recv(21)}) pasaron con \texttt{mode="go\_back\_n"}. El envío de
+archivos de 304 y 1201 bytes llegó idéntico según \texttt{cmp}.
+
+\textbf{Test con pérdida.} Se repitió induciendo pérdidas con \texttt{netem} (ver
+sección~\ref{sec:netem}). Los resultados están en la sección~\ref{sec:pruebas}.
+
+\section{Parte 3: control de congestión}
+
+\begin{itemize}[nosep]
+  \item \texttt{congestion\_controler} es un \texttt{CongestionControl(8)} que se crea en
+        el constructor de \texttt{SocketTCP}. Se mantiene entre llamadas a
+        \texttt{send}, igual que la \texttt{cwnd} de TCP se mantiene durante la conexión.
+  \item \texttt{congestion\_control\_on} se activa o desactiva con el setter
+        \texttt{set\_congestion\_control(bool)}. Por defecto vale \texttt{True}.
+  \item Con control de congestión, la ventana parte con
+        \texttt{window\_size = get\_MSS\_in\_cwnd()}. Sin él, la ventana se mantiene fija
+        en 8 segmentos. En ambos casos el mensaje se divide en trozos de 8 bytes, para que
+        la comparación de la sección~\ref{sec:experimento} sea justa.
+  \item Cada ACK válido llama a \texttt{event\_ack\_received()} y cada timeout llama a
+        \texttt{event\_timeout()}. Después de cada evento se recalcula
+        \texttt{window\_size} y se aplica con \texttt{data\_window.update\_window\_size}.
+        Si la ventana creció, sus nuevos elementos se envían seguidos.
+\end{itemize}
+
+\textbf{Valor inicial de \texttt{window\_size}.} Debe ser 1, porque \texttt{cwnd} parte en
+1 MSS y \texttt{get\_MSS\_in\_cwnd()} retorna 1. El modo debug lo confirma:
+
+\begin{lstlisting}
+(debug) [CC] inicio: estado=slow start, cwnd=8 B, ssthresh=None, window_size=1
+\end{lstlisting}
+
+\textbf{ACK que se cuenta una vez.} \texttt{event\_ack\_received()} se llama una vez por
+cada ACK que avanza la ventana, aunque ese ACK confirme varios segmentos porque se
+perdieron ACKs anteriores. Así se cuentan ACKs y no bytes confirmados, como en TCP Tahoe
+sin \emph{byte counting}. Los ACK repetidos no generan eventos, porque esta actividad no
+implementa fast retransmit.
+
+\textbf{Caso borde: la ventana se achica y llega un ACK fuera de ella.} Después de un
+timeout la ventana queda en 1 elemento, pero puede llegar un ACK de segmentos enviados con
+la ventana anterior, cuyo \texttt{seq} supera el último elemento de la ventana actual. En
+ese caso se avanza la ventana completa, y se repite hasta que el ACK caiga dentro de ella.
+Luego se envían los elementos que no estaban confirmados. El caso ocurrió 5 veces en las
+pruebas con \texttt{netem}. En el siguiente ejemplo, la ventana de 2 elementos tenía los
+segmentos \texttt{seq=835} y \texttt{843}. El receptor recibió ambos, pero sus ACK no
+llegaron al emisor. Tras el timeout la ventana quedó solo con \texttt{seq=835}, y el ACK
+acumulado \texttt{seq=851}, que llegó en el tercer intento, confirma también el segmento
+\texttt{seq=843}, que ya no estaba en la ventana:
+
+\begin{lstlisting}
+# emisor
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=16 B, ssthresh=8, window_size=2
+(debug) Enviando [DATA seq=835 data=b'sum dolo']
+(debug) Enviando [DATA seq=843 data=b'r sit am']
+(debug) Timeout esperando ACK de seq=835, retransmitiendo la ventana
+(debug) [CC] timeout: estado=slow start, cwnd=8 B, ssthresh=8, window_size=1
+(debug) Enviando [DATA seq=835 data=b'sum dolo']
+(debug) Timeout esperando ACK de seq=835, retransmitiendo la ventana
+(debug) [CC] timeout: estado=slow start, cwnd=8 B, ssthresh=4, window_size=1
+(debug) Enviando [DATA seq=835 data=b'sum dolo']
+(debug) Timeout esperando ACK de seq=835, retransmitiendo la ventana
+(debug) [CC] timeout: estado=slow start, cwnd=8 B, ssthresh=4, window_size=1
+(debug) Enviando [DATA seq=835 data=b'sum dolo']
+(debug) Recibido [ACK seq=851]
+(debug) ACK seq=851 más allá de la ventana, se avanzó 2 veces
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=16 B, ssthresh=4, window_size=2
+(debug) Enviando [DATA seq=851 data=b'et, cons']
+(debug) Enviando [DATA seq=859 data=b'ectetur ']
+# receptor
+(debug) Recibido [DATA seq=835 data=b'sum dolo'], enviando ACK seq=843
+(debug) Recibido [DATA seq=843 data=b'r sit am'], enviando ACK seq=851
+(debug) Recibido [DATA seq=835 data=b'sum dolo'] fuera de orden, reenviando ACK seq=851
+\end{lstlisting}
+
+\section{Pruebas}
+\label{sec:pruebas}
+
+\subsection{Pérdidas con \texttt{netem}}
+\label{sec:netem}
+
+Las pruebas con pérdida se hicieron con \texttt{netem}, con la configuración del
+enunciado:
+
+\begin{lstlisting}
+% sudo tc qdisc add dev lo root netem loss 20.0% delay 0.5s
+\end{lstlisting}
+
+Con este delay el RTT es de 1 s, menor que el timeout de 1,5 s que se usó en estas
+pruebas.
+
+\subsection{Integridad de los datos}
+
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+  \toprule
+  Prueba (\texttt{netem}: 20\% de pérdida, delay 0,5 s) & Criterio & Resultado \\
+  \midrule
+  Archivo de 1201 B, Go-Back-N con control de congestión & \texttt{cmp} idéntico & 3/3 \\
+  Archivo de 1201 B, Go-Back-N sin control de congestión & \texttt{cmp} idéntico & 3/3 \\
+  Archivo de 304 B, Stop \& Wait & \texttt{cmp} idéntico & 2/2 \\
+  Tests 1--4 de \texttt{send}/\texttt{recv}, Go-Back-N & 4 de 4 \texttt{Passed} & 3/3 \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Con el delay real, enviar el archivo de 1201 B tomó en promedio 153 s con control de
+congestión (138, 178 y 145 s; 474 segmentos intercambiados en promedio) y 81 s sin él
+(82, 75 y 86 s; 723 segmentos). Es la misma tendencia del experimento de la
+sección~\ref{sec:experimento}. El caso borde de la ventana que se achica (parte 3)
+ocurrió 5 veces en estas ejecuciones.
+
+\subsection{Comportamiento sin pérdida}
+
+Sin pérdida inducida no ocurrieron timeouts espontáneos: en \texttt{localhost} el RTT es
+del orden de microsegundos, muy inferior a cualquier timeout usado. Por eso el control de
+congestión se queda siempre en slow start: \texttt{ssthresh} sigue en \texttt{None} y la
+ventana crece en 1 MSS por ACK. Con 1201 bytes (152 segmentos de datos), \texttt{cwnd}
+llega a $153 \cdot 8$ bytes y el envío toma unos 8 ms:
+
+\begin{lstlisting}
+(debug) [CC] inicio: estado=slow start, cwnd=8 B, ssthresh=None, window_size=1
+(debug) [CC] ACK: estado=slow start, cwnd=16 B, ssthresh=None, window_size=2
+(debug) [CC] ACK: estado=slow start, cwnd=24 B, ssthresh=None, window_size=3
+(debug) [CC] ACK: estado=slow start, cwnd=32 B, ssthresh=None, window_size=4
+...
+STATS cliente: tiempo_envio=0.008s segmentos_enviados=154
+\end{lstlisting}
+
+Esto es lo esperado: sin pérdidas no hay eventos que reduzcan la ventana ni que definan
+\texttt{ssthresh}.
+
+\subsection{Comportamiento con pérdida}
+
+Con \texttt{netem} (20\% de pérdida y delay de 0,5 s), cada timeout define
+\texttt{ssthresh} como la mitad de \texttt{cwnd} y devuelve la ventana a 1 MSS. Al
+alcanzar \texttt{ssthresh} se pasa a congestion avoidance, donde la ventana crece en
+$8/n$ bytes por ACK. Este extracto es de una de las ejecuciones con el archivo de 1201 B:
+
+\begin{lstlisting}
+(debug) [CC] timeout: estado=slow start, cwnd=8 B, ssthresh=8, window_size=1
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=16 B, ssthresh=8, window_size=2
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=20 B, ssthresh=8, window_size=2
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=24 B, ssthresh=8, window_size=3
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=26.6667 B, ssthresh=8, window_size=3
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=29.3333 B, ssthresh=8, window_size=3
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=32 B, ssthresh=8, window_size=4
+...
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=40 B, ssthresh=8, window_size=5
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=41.6 B, ssthresh=8, window_size=5
+...
+(debug) [CC] ACK: estado=congestion avoidance, cwnd=48 B, ssthresh=8, window_size=6
+(debug) Timeout esperando ACK de seq=243, retransmitiendo la ventana
+(debug) [CC] timeout: estado=slow start, cwnd=8 B, ssthresh=24, window_size=1
+(debug) [CC] ACK: estado=slow start, cwnd=16 B, ssthresh=24, window_size=2
+\end{lstlisting}
+
+Los cambios son correctos. Con \texttt{cwnd} = 8 B, el timeout deja
+\texttt{ssthresh} $= 8/2 = 4$ o, como en la primera línea, 8 cuando \texttt{cwnd} era
+16 B. El siguiente ACK supera \texttt{ssthresh} y pasa a congestion avoidance, donde con
+16 B se suman $8/2 = 4$ bytes por ACK, con 24 B $8/3$, con 32 B $8/4 = 2$ y con 40 B
+$8/5 = 1{,}6$. El timeout con \texttt{cwnd} = 48 B deja \texttt{ssthresh} = 24 y la
+ventana vuelve a slow start, donde se suman 8 bytes por ACK. La figura~\ref{fig:cwnd}
+muestra los primeros 60 eventos de esa ejecución.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\textwidth, height=6cm,
+  xlabel={Evento de control de congestión}, ylabel={\texttt{cwnd} [bytes]},
+  xmin=0, xmax=59, ymin=0, ymax=52,
+  ytick={0,8,16,24,32,40,48},
+  grid=major, grid style={gray!20},
+  legend style={at={(0.5,1.03)},anchor=south,legend columns=3,font=\footnotesize},
+]
+\addplot[thick,blue!60!black,mark=*,mark size=1pt] coordinates {
+(0,8) (1,8) (2,8) (3,8) (4,8) (5,16) (6,8) (7,8) (8,16) (9,8) (10,16) (11,20) (12,24)
+(13,26.67) (14,29.33) (15,32) (16,34) (17,36) (18,38) (19,40) (20,41.6) (21,43.2)
+(22,44.8) (23,46.4) (24,48) (25,8) (26,16) (27,8) (28,16) (29,20) (30,24) (31,8) (32,16)
+(33,20) (34,24) (35,26.67) (36,29.33) (37,32) (38,34) (39,36) (40,38) (41,40) (42,41.6)
+(43,43.2) (44,44.8) (45,46.4) (46,48) (47,8) (48,16) (49,24) (50,26.67) (51,29.33)
+(52,32) (53,34) (54,36) (55,38) (56,40) (57,41.6) (58,8) (59,16)};
+\addlegendentry{\texttt{cwnd}}
+\addplot[only marks,red!70!black,mark=x,mark size=3pt,thick] coordinates {
+(1,8) (2,8) (3,8) (4,8) (6,8) (7,8) (9,8) (25,8) (27,8) (31,8) (47,8) (58,8)};
+\addlegendentry{timeout}
+\addplot[const plot,dashed,orange!80!black,thick] coordinates {
+(1,4) (6,8) (7,4) (9,8) (25,24) (27,8) (31,12) (47,24) (58,20) (59,20)};
+\addlegendentry{\texttt{ssthresh}}
+\end{axis}
+\end{tikzpicture}
+\caption{Evolución de \texttt{cwnd} y \texttt{ssthresh} con \texttt{netem} (20\% de
+pérdida, delay 0,5 s, MSS = 8).}
+\label{fig:cwnd}
+\end{figure}
+
+Se observa el patrón característico de Tahoe: crecimiento rápido en slow start,
+crecimiento lineal más lento en congestion avoidance y caída a 1 MSS en cada timeout. Con
+20\% de pérdida en cada dirección, la ventana nunca superó los 6 MSS (48 B) en esta
+ejecución.
+
+\subsection{Con versus sin control de congestión}
+\label{sec:experimento}
+
+El enunciado pide un timeout menor a 1 s (0,5 s). Con el delay de 0,5 s de
+\texttt{netem}, el RTT de 1 s superaría ese timeout y todos los segmentos se
+retransmitirían antes de recibir su ACK. Por eso, para este experimento \texttt{netem} se
+configuró solo con pérdida:
+
+\begin{lstlisting}
+% sudo tc qdisc change dev lo root netem loss 20.0%
+\end{lstlisting}
+
+\texttt{experimento.sh} transmite un archivo 5 veces con Go-Back-N con y sin control de
+congestión. Antes de ejecutarlo se configura \texttt{TIMEOUT = 0.5} y
+\texttt{DEBUG = False} en \texttt{SocketTCP.py}:
+
+\begin{lstlisting}
+% bash experimento.sh archivo_100.txt 5
+% bash experimento.sh archivo_1200.txt 5
+\end{lstlisting}
+
+Para cada ejecución registra el tiempo de \texttt{send} y la cantidad de segmentos
+enviados por el cliente (datos, más \texttt{SYN} y \texttt{ACK} del handshake) y por el
+servidor (\texttt{SYN+ACK} y ACKs). Siguiendo el enunciado, se probó un archivo de 100 B
+y, para responder la pregunta sobre archivos de más de 1000 B, uno de 1201 B. En todas
+las ejecuciones el archivo llegó íntegro.
+
+\begin{center}
+\begin{tabular}{@{}lcccc@{}}
+  \toprule
+  & \multicolumn{2}{c}{100 B} & \multicolumn{2}{c}{1201 B} \\
+  \cmidrule(lr){2-3}\cmidrule(lr){4-5}
+  Rep. & con CC & sin CC & con CC & sin CC \\
+  \midrule
+  1 & 1,502 s / 43 & 3,002 s / 98 & 29,529 s / 487 & 17,521 s / 765 \\
+  2 & 2,503 s / 59 & 1,501 s / 50 & 19,525 s / 465 & 18,022 s / 715 \\
+  3 & 2,503 s / 42 & 2,002 s / 60 & 20,522 s / 458 & 24,025 s / 892 \\
+  4 & 3,003 s / 57 & 1,501 s / 52 & 29,530 s / 506 & 21,023 s / 862 \\
+  5 & 2,503 s / 42 & 3,002 s / 100 & 31,528 s / 491 & 15,020 s / 674 \\
+  \midrule
+  Promedio & \textbf{2,403 s / 48,6} & \textbf{2,202 s / 72,0} & \textbf{26,127 s / 481,4} & \textbf{19,122 s / 781,6} \\
+  \bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize Cada celda: tiempo de \texttt{send} / segmentos totales intercambiados
+(cliente + servidor).}
+\end{center}
+
+\textbf{¿Cuál toma menos tiempo?} En estas condiciones, Go-Back-N \emph{sin} control de
+congestión. Con el archivo de 1201 B tardó en promedio 19,1 s, contra 26,1 s con control
+de congestión (27\% menos). Con 100 B la diferencia es mínima (2,2 s contra 2,4 s) y queda
+dentro de la variabilidad entre repeticiones. Las pruebas con delay de la
+sección~\ref{sec:netem} muestran la misma tendencia (81 s contra 153 s).
+
+\textbf{¿Cómo se comparan?} El control de congestión intercambió muchos menos segmentos:
+38\% menos con 1201 B (481 contra 782) y 33\% menos con 100 B (49 contra 72). La
+explicación es la siguiente:
+
+\begin{itemize}[nosep]
+  \item Sin delay, el RTT en \texttt{localhost} es casi cero, así que el tiempo total
+        depende casi solo de cuántos timeouts de 0,5 s ocurren. Por eso los tiempos son
+        casi múltiplos exactos de 0,5 s.
+  \item Las pérdidas son aleatorias y no se deben a congestión, pero el control de
+        congestión las interpreta como congestión. Después de cada timeout, la ventana
+        vuelve a 1 MSS y \texttt{ssthresh} baja. Como con 20\% de pérdida casi siempre
+        vuelve a ocurrir otro timeout, la ventana se mantiene pequeña (figura~\ref{fig:cwnd})
+        y cada timeout permite avanzar pocos segmentos.
+  \item Sin control de congestión la ventana siempre es de 8. Cada timeout retransmite
+        hasta 8 segmentos, de los que muchos ya habían llegado (más tráfico), pero en cada
+        intervalo entre timeouts se avanza más. El resultado son menos timeouts en total,
+        aunque con más segmentos enviados.
+\end{itemize}
+
+El control de congestión no está pensado para minimizar el tiempo de un flujo aislado con
+pérdidas aleatorias, sino para que la red sea justa: al reducir la ventana ante una
+pérdida, el flujo deja de sobrecargar la red y le deja capacidad a otros flujos. En una
+red real con congestión, enviar 62\% más segmentos (como Go-Back-N sin control) empeoraría
+la congestión y aumentaría las pérdidas para todos, mientras que el control de congestión
+ayuda a evitar el colapso de la red.
+
+\section{Casos borde y limitaciones}
+
+\begin{itemize}
+  \item \textbf{Ventana que se achica.} Se resuelve avanzando la ventana completa hasta
+        que el ACK caiga dentro de ella (parte 3).
+  \item \textbf{Timer único de la ventana.} Cuando llega un ACK que no permite enviar
+        segmentos nuevos, el timer no se reinicia. Así puede vencer antes de un timeout
+        completo contado desde el último ACK, lo que solo provoca una retransmisión
+        anticipada que Go-Back-N maneja correctamente.
+  \item \textbf{\texttt{ssthresh} menor que 1 MSS.} Con \texttt{cwnd} = 8 B, un timeout
+        deja \texttt{ssthresh} = 4 B, por lo que el siguiente ACK pasa directamente a
+        congestion avoidance. Es la consecuencia de aplicar la regla
+        \texttt{ssthresh = cwnd/2} sin un mínimo; TCP real usa un mínimo de 2 MSS.
+  \item \textbf{Sin fast retransmit.} Los ACK repetidos se ignoran, como pide el
+        enunciado (solo slow start y congestion avoidance). Implementar fast retransmit
+        reduciría los timeouts y mejoraría el tiempo con control de congestión.
+  \item \textbf{Cierre.} Se mantiene la limitación de la actividad anterior: si se pierden
+        los 3 \texttt{FIN}, \texttt{recv\_close()} queda esperando.
+  \item \textbf{Uso de CPU.} \texttt{SocketUDP.recvfrom} revisa un socket no bloqueante
+        en un loop hasta que llega algo o vence un timer, así que mientras un extremo
+        espera usa un núcleo de la CPU completo. Es el comportamiento de la clase
+        entregada, que se usa sin modificar.
+\end{itemize}
+
+\section*{Declaración de uso de IA}
+
+En este informe se utilizó el modelo de IA Claude exclusivamente como apoyo en la
+revisión del código, recomendaciones de diseño, la redacción del informe, la creación de
+las tablas y la elaboración de los gráficos y diagramas en \LaTeX{}. Las decisiones de
+diseño, la implementación del código, la ejecución de los experimentos y la obtención de
+los datos fueron realizadas por el autor. Todo el contenido generado con apoyo de la
+herramienta fue revisado y validado, y su responsabilidad es del autor.
+
+\end{document}

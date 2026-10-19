@@ -1,0 +1,562 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage{spectral}
+\usepackage[margin=2.5cm,headheight=48pt,headsep=18pt]{geometry}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\usetikzlibrary{arrows.meta,positioning}
+
+\newcommand{\curso}{CC4303-1 Redes}
+\newcommand{\tituloinforme}{Actividad: Sockets orientados a conexión con Stop \& Wait}
+
+\renewcommand{\sectionmark}[1]{\markboth{#1}{}}
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+
+% Cabecera y pie de página con el mismo estilo del informe de práctica.
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\leftmark}
+\fancyfoot[L]{\small Informe \tituloinforme}
+\fancyfoot[R]{\small CC4303-1}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+\fancypagestyle{portada}{%
+  \fancyhf{}
+  \fancyhead[L]{\small\begin{tabular}[b]{@{}l@{}}
+    Universidad de Chile\\
+    Facultad de Ciencias Físicas y Matemáticas\\
+    Departamento de Ciencias de la Computación\\
+    \curso
+  \end{tabular}}
+  \fancyhead[R]{\includegraphics[height=1.3cm]{logo_fcfm.png}}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+
+\definecolor{fondocodigo}{gray}{0.96}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{fondocodigo},
+  frame=single,
+  rulecolor=\color{gray!50},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {Á}{{\'A}}1 {ñ}{{\~n}}1
+}
+
+% Diagramas de secuencia: dos líneas de tiempo verticales.
+\tikzset{
+  msg/.style={-{Stealth[length=2.5mm]},thick},
+  lost/.style={-{Stealth[length=2.5mm]},thick,dashed,red!70!black},
+  note/.style={font=\footnotesize,align=left},
+  proc/.style={font=\footnotesize\itshape,text=blue!50!black},
+}
+
+\begin{document}
+
+\begin{titlepage}
+  \thispagestyle{portada}
+  \centering
+  \vspace*{5cm}
+  {\LARGE Informe\par}
+  \vspace{0.3cm}
+  {\Large \tituloinforme\par}
+  \vspace{0.4cm}
+  {\large Juan Pablo Bustamante Flaño\par}
+  \vfill
+  Correo electrónico: juan.bustamante.f@ug.uchile.cl\\
+  Curso: \curso{} --- Primavera 2026\\
+  Profesora: Ivana Bachmann\\
+  Módulo 3: Protocolos de transporte, semanas 6-8\\
+  Fecha: 19/10/2026
+  \vspace*{3cm}
+\end{titlepage}
+
+\section{Introducción}
+
+En esta actividad se implementó una versión simplificada de TCP sobre sockets UDP,
+usando Stop \& Wait como mecanismo de control de errores. El resultado es la clase
+\texttt{SocketTCP}, que ofrece una interfaz parecida a la de los sockets orientados a
+conexión de Python (\texttt{bind}, \texttt{connect}, \texttt{accept}, \texttt{send},
+\texttt{recv}, \texttt{close} y \texttt{recv\_close}), junto a un cliente y un servidor
+que la utilizan para transmitir un archivo de forma íntegra, incluso cuando se pierden
+segmentos en ambas direcciones.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+  \toprule
+  Archivo & Contenido \\
+  \midrule
+  \texttt{SocketTCP.py} & Clase \texttt{SocketTCP} y constantes de configuración. \\
+  \texttt{cliente.py}, \texttt{servidor.py} & Cliente y servidor de entrega. \\
+  \texttt{cliente\_udp.py}, \texttt{servidor\_udp.py} & Programas provisorios de los pasos 1 y 3. \\
+  \texttt{test\_cliente.py}, \texttt{test\_servidor.py} & Pruebas de \texttt{send}, \texttt{recv} y cierre. \\
+  \texttt{archivo.txt} & Archivo de prueba. \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Uso de los programas de entrega:
+
+\begin{lstlisting}
+% python3 servidor.py localhost 8000 > recibido.txt
+% python3 cliente.py localhost 8000 < archivo.txt
+\end{lstlisting}
+
+El servidor escribe el archivo recibido en salida estándar y los mensajes de debug en
+salida de error, de modo que ambos flujos no se mezclan y es posible comparar el archivo
+recibido con el original usando \texttt{cmp}.
+
+\section{Desarrollo}
+
+\subsection{Paso 1: cliente y servidor provisorios}
+
+\texttt{cliente\_udp.py} pide la ruta del archivo con \texttt{input()}, lo carga completo
+en memoria y lo envía a \texttt{(localhost, 8000)} en trozos de a lo más 16 bytes.
+\texttt{servidor\_udp.py} recibe los trozos e imprime su contenido. Como todavía no se
+conoce el largo del mensaje, el servidor se queda esperando más mensajes una vez que
+recibió todo.
+
+\textbf{Test 1.} Al enviar \texttt{archivo.txt} (304 bytes, 19 trozos) sin pérdidas, el
+servidor imprimió el archivo completo y sin errores.
+
+\textbf{Test 2.} Se indujo pérdida con \texttt{netem}, con la configuración del
+enunciado:
+
+\begin{lstlisting}
+% sudo tc qdisc add dev lo root netem loss 20.0% delay 0.5s
+% echo archivo.txt | python3 cliente_udp.py
+\end{lstlisting}
+
+El servidor imprimió un texto con fragmentos faltantes (por ejemplo, desde
+\texttt{incl} salta a \texttt{erden segmentos}):
+
+\begin{lstlisting}
+Wait.
+Este archivo tiene bastante más de 16 bytes, por lo que el cliente
+debe dividirlo en varios segmentos y el servidor debe rearmarlo
+de forma íntegra inclerden segmentos o ACKs.
+Áéíóú ñ: también se prueban caracteres UTF-8 de más de un byte.
+\end{lstlisting}
+
+Esto muestra que UDP por sí solo no garantiza la entrega y motiva el resto de la
+actividad.
+
+\subsection{Paso 2: la clase \texttt{SocketTCP}}
+
+El constructor no recibe parámetros y crea un socket UDP (\texttt{AF\_INET},
+\texttt{SOCK\_DGRAM}). Además inicializa el estado que se usa durante la conexión: las
+direcciones local y de destino, los contadores \texttt{seq} y \texttt{expected\_seq}, el
+\texttt{seq} del último \texttt{ACK} del handshake, la cantidad de bytes del mensaje que
+quedan por entregar (\texttt{message\_pending}), un buffer con los bytes recibidos que no
+cupieron en el \texttt{buff\_size} pedido (\texttt{recv\_buffer}), una lista de segmentos
+recibidos antes de tiempo (\texttt{pending\_segments}) y la lista de conexiones ya
+aceptadas.
+
+\subsection{Paso 3: headers TCP}
+
+Se implementaron \texttt{parse\_segment} y \texttt{create\_segment}, que convierten entre
+bytes y un diccionario con las llaves \texttt{syn}, \texttt{ack}, \texttt{fin},
+\texttt{seq} y \texttt{data}. \textbf{Decisión de diseño:} el header es texto con el
+formato \texttt{SYN|ACK|FIN|SEQ|}, donde cada flag es \texttt{0} o \texttt{1} y
+\texttt{SEQ} usa siempre 10 dígitos; por ejemplo, \texttt{b'1|0|0|0000000042|hola'}.
+Así todos los headers miden 17 bytes, los datos empiezan siempre en la posición 17
+(pueden contener \texttt{|} sin confundir al parser) y el socket UDP interno usa un buffer
+fijo de $17 + 16 = 33$ bytes. El número de secuencia avanza en los bytes de datos
+enviados y cada \texttt{ACK} lleva el siguiente byte esperado, como en el video.
+
+Al comienzo de \texttt{SocketTCP.py} se definen como variables globales el timeout
+(\texttt{TIMEOUT = 1.5} s, mayor que el RTT de 1 s que produce \texttt{netem delay
+0.5s}) y el modo debug (\texttt{DEBUG = True}, que imprime en \texttt{stderr} cada
+segmento, timeout y retransmisión).
+
+Para el test, el cliente y el servidor provisorios aceptan la opción
+\texttt{-{}-headers}: el cliente encapsula cada trozo con \texttt{create\_segment} y el
+servidor extrae los datos con \texttt{parse\_segment}. El servidor rearmó el archivo
+completo, igual que en el test 1.
+
+\subsection{Paso 4: 3-way handshake}
+
+\begin{itemize}[nosep]
+  \item \texttt{bind(address)} asocia el socket UDP a la dirección y la guarda.
+  \item \texttt{connect(address)} elige un número de secuencia inicial $x$ aleatorio
+        entre 0 y 100, envía \texttt{SYN seq=x} y espera \texttt{SYN+ACK seq=x+1}.
+        Luego envía \texttt{ACK seq=x+2} a la dirección desde donde llegó el
+        \texttt{SYN+ACK}, que es la del nuevo socket del servidor.
+  \item \texttt{accept()} espera un \texttt{SYN} y crea un nuevo \texttt{SocketTCP}
+        asociado a la misma IP, en el primer puerto libre después del que escucha. Prueba
+        con \texttt{bind} el puerto siguiente y, si está ocupado (\texttt{OSError}), sigue
+        con el próximo. Desde ese socket envía el \texttt{SYN+ACK} y espera el
+        \texttt{ACK}. Retorna el nuevo socket y su dirección, que es distinta a la del
+        socket que escucha.
+\end{itemize}
+
+Al terminar el handshake ambos extremos tienen \texttt{seq = expected\_seq = x+2}. La
+figura~\ref{fig:handshake} muestra el diagrama y qué función ejecuta cada paso.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[yscale=0.9]
+  \node[font=\bfseries] at (0,0.6) {Cliente};
+  \node[font=\bfseries] at (8,0.6) {Servidor};
+  \draw[thick] (0,0) -- (0,-6.2);
+  \draw[thick] (8,0) -- (8,-6.2);
+  \draw[msg] (0,-0.5) -- node[above,sloped] {\texttt{SYN seq=x}} (8,-1.7);
+  \draw[msg] (8,-2.4) -- node[above,sloped] {\texttt{SYN+ACK seq=x+1}} (0,-3.6);
+  \draw[msg] (0,-4.3) -- node[above,sloped] {\texttt{ACK seq=x+2}} (8,-5.5);
+  \node[proc,anchor=east,align=right] at (-0.4,-3.1) {\texttt{connect(address)}\\$x$ aleatorio en $[0,100]$};
+  \node[proc,anchor=west,align=left] at (8.3,-1.7) {\texttt{accept()}: socket que\\escucha recibe el \texttt{SYN}};
+  \node[proc,anchor=west,align=left] at (8.3,-3.4) {\texttt{accept()}: el nuevo socket\\envía el \texttt{SYN+ACK}};
+  \node[proc,anchor=west,align=left] at (8.3,-5.5) {\texttt{accept()} retorna\\(nuevo socket, dirección)};
+  \node[proc,anchor=east,align=right] at (-0.4,-5.6) {\texttt{connect} retorna};
+\end{tikzpicture}
+\caption{3-way handshake y su relación con \texttt{connect} y \texttt{accept}.}
+\label{fig:handshake}
+\end{figure}
+
+\textbf{Test.} Con el código del enunciado para el cliente y el servidor, el handshake
+terminó con éxito:
+
+\begin{lstlisting}
+(debug) Enviando [SYN seq=20] a ('localhost', 8000)
+(debug) Recibido [SYN+ACK seq=21] desde ('127.0.0.1', 8001), enviando ACK seq=22
+\end{lstlisting}
+
+\subsection{Paso 5: Stop \& Wait con \texttt{send} y \texttt{recv}}
+
+\textbf{\texttt{send(message)}.} Primero envía un segmento con el largo del mensaje,
+codificado como texto decimal (por ejemplo, \texttt{b'304'}), y luego el mensaje en trozos
+de 16 bytes. Cada segmento se envía con Stop \& Wait: se envía, se espera el \texttt{ACK}
+con \texttt{seq} igual a \texttt{seq + len(datos)} y, si se cumple el timeout, se
+retransmite. El timeout se implementa como en el material del curso: se configura con
+\texttt{settimeout(TIMEOUT)} y el error \texttt{socket.timeout} que lanza
+\texttt{recvfrom} se captura con \texttt{try}/\texttt{except} para retransmitir. Los
+segmentos que llegan y no son el \texttt{ACK} esperado se ignoran y se sigue esperando. Al recibir el \texttt{ACK}, \texttt{seq} avanza y se envía el siguiente
+segmento. El primer segmento usa el último \texttt{seq} guardado, así que varios
+\texttt{send} seguidos continúan la numeración.
+
+\textbf{\texttt{recv(buff\_size)}.} Usa dos atributos: \texttt{message\_pending}, los
+bytes del mensaje actual que aún no se entregan, y \texttt{recv\_buffer}, los bytes ya
+recibidos y confirmados que todavía no se entregan. El algoritmo es:
+
+\begin{enumerate}[nosep]
+  \item Si \texttt{message\_pending == 0}, comienza un mensaje nuevo: el primer segmento
+        trae el largo, que se guarda en \texttt{message\_pending}.
+  \item Se calcula \texttt{objetivo = min(message\_pending, buff\_size)}.
+  \item Se reciben segmentos en orden y se agregan a \texttt{recv\_buffer} hasta que este
+        tenga al menos \texttt{objetivo} bytes.
+  \item Se retornan los primeros \texttt{objetivo} bytes. El resto queda en
+        \texttt{recv\_buffer} y \texttt{message\_pending} disminuye en \texttt{objetivo}.
+\end{enumerate}
+
+\textbf{Decisión de diseño: bytes sobrantes.} Como los segmentos traen hasta 16 bytes,
+puede ocurrir que \texttt{len(recibido) > buff\_size}, por ejemplo con
+\texttt{buff\_size = 14}. En ese caso los bytes que sobran no se descartan ni se dejan
+sin confirmar: ya se confirmaron con su \texttt{ACK} y quedan en \texttt{recv\_buffer}
+para la siguiente llamada a \texttt{recv}. Así \texttt{recv} nunca retorna más de
+\texttt{buff\_size} bytes y no se pierden datos. Con esto, \texttt{recv} retorna apenas se
+cumple \texttt{len(recibido) >= min(message\_length, buff\_size)}, como pide el enunciado.
+
+\textbf{Recepción de cada segmento.} El receptor solo acepta un segmento de datos si su
+\texttt{seq} es igual a \texttt{expected\_seq}. En ese caso avanza
+\texttt{expected\_seq} y envía \texttt{ACK seq=expected\_seq}. Si llega un segmento con un
+\texttt{seq} anterior, es una retransmisión porque se perdió el \texttt{ACK}: se descartan
+sus datos y se reenvía el \texttt{ACK} con el \texttt{expected\_seq} actual.
+
+\textbf{Test.} Sin pérdidas, los tests del enunciado pasaron:
+
+\begin{lstlisting}
+Test 1 received: b'Mensje de len=16'
+Test 1: Passed
+Test 2 received: b'Mensaje de largo 19'
+Test 2: Passed
+Test 3 received: b'Mensaje de largo 19'
+Test 3: Passed
+\end{lstlisting}
+
+\subsection{Paso 6: cierre de conexión}
+
+\texttt{close()} implementa el lado del Host A: envía \texttt{FIN seq=s}, espera
+\texttt{FIN+ACK seq=s+1} y responde \texttt{ACK seq=s+2}. \texttt{recv\_close()}
+implementa el lado del Host B: espera el \texttt{FIN}, responde \texttt{FIN+ACK} y espera
+el último \texttt{ACK}. En ambos casos se cierra el socket UDP al terminar. Se decidió
+combinar el \texttt{ACK} del \texttt{FIN} y el \texttt{FIN} de B en un solo segmento
+\texttt{FIN+ACK}, que es lo que espera \texttt{close()} en el paso 8.
+
+\textbf{Test.} Al agregar \texttt{close()} al final del cliente de prueba y
+\texttt{recv\_close()} al final del servidor, la conexión se cerró con éxito:
+
+\begin{lstlisting}
+# cliente                                   # servidor
+(debug) Enviando [FIN seq=126]               (debug) Recibido [FIN seq=126]
+(debug) Recibido [FIN+ACK seq=127],          (debug) Enviando [FIN+ACK seq=127]
+        enviando [ACK seq=128] 3 veces       (debug) Recibido [ACK seq=128],
+(debug) Conexión cerrada                             conexión cerrada
+\end{lstlisting}
+
+\subsection{Paso 7: handshake con pérdidas}
+
+\texttt{connect} y \texttt{accept} se modificaron para usar Stop \& Wait:
+\texttt{connect} retransmite el \texttt{SYN} si no llega el \texttt{SYN+ACK} antes del
+timeout, y \texttt{accept} retransmite el \texttt{SYN+ACK} si no llega el \texttt{ACK}.
+Como el cliente retransmite el \texttt{SYN} al socket que escucha, el servidor guarda las
+conexiones ya aceptadas (dirección del cliente, \texttt{seq} inicial) e ignora los
+\texttt{SYN} repetidos de esas conexiones en llamadas posteriores a \texttt{accept}.
+
+\textbf{Caso borde: se pierde el último \texttt{ACK} del handshake.} El cliente no tiene
+forma de saber que el \texttt{ACK} se perdió: \texttt{connect} ya retornó y el cliente
+pasa a \texttt{send}. El servidor, en cambio, sigue en \texttt{accept} esperando el
+\texttt{ACK}, retransmite el \texttt{SYN+ACK} y no confirma los datos del cliente. La
+figura~\ref{fig:borde} muestra este caso y la solución.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[yscale=0.9]
+  \node[font=\bfseries] at (0,0.6) {Cliente};
+  \node[font=\bfseries] at (8,0.6) {Servidor};
+  \draw[thick] (0,0) -- (0,-10.4);
+  \draw[thick] (8,0) -- (8,-10.4);
+  \draw[msg] (0,-0.4) -- node[above,sloped] {\texttt{SYN seq=x}} (8,-1.4);
+  \draw[msg] (8,-1.8) -- node[above,sloped] {\texttt{SYN+ACK seq=x+1}} (0,-2.8);
+  \draw[lost] (0,-3.2) -- node[above,sloped] {\texttt{ACK seq=x+2}} (4.5,-3.8);
+  \node[red!70!black,font=\Large] at (4.7,-3.85) {$\times$};
+  \node[proc,anchor=east,align=right] at (-0.3,-3.2) {\texttt{connect} retorna};
+  \node[proc,anchor=east,align=right] at (-0.3,-4.4) {\texttt{send}};
+  \draw[msg] (0,-4.4) -- node[above,sloped] {\texttt{DATA seq=x+2 (largo)}} (8,-5.4);
+  \node[proc,anchor=west,align=left] at (8.3,-5.4) {\texttt{accept}: segmento sin\\\texttt{SYN} con \texttt{seq=x+2}\\$\Rightarrow$ ACK implícito};
+  \node[proc,anchor=west,align=left] at (8.3,-7.0) {se guarda en\\\texttt{pending\_segments}};
+  \node[proc,anchor=west,align=left] at (8.3,-8.2) {\texttt{recv} lo procesa};
+  \draw[msg] (8,-8.2) -- node[above,sloped] {\texttt{ACK seq=x+2+L}} (0,-9.2);
+  \draw[densely dotted] (-0.2,-6.2) -- (8.2,-6.2);
+  \node[note,fill=white] at (4,-6.2) {Variante: el servidor alcanza a retransmitir};
+  \draw[msg] (8,-6.6) -- node[above,sloped] {\texttt{SYN+ACK seq=x+1}} (0,-7.6);
+  \node[proc,anchor=east,align=right] at (-0.3,-7.6) {\texttt{send}/\texttt{recv}:\\reenvía \texttt{ACK seq=x+2}};
+\end{tikzpicture}
+\caption{Caso borde: se pierde el último \texttt{ACK} del handshake.}
+\label{fig:borde}
+\end{figure}
+
+\textbf{Solución.} Se usan dos mecanismos complementarios:
+
+\begin{enumerate}[nosep]
+  \item \textbf{ACK implícito en \texttt{accept}.} Mientras espera el \texttt{ACK}, el
+        servidor también acepta cualquier segmento sin \texttt{SYN} cuyo \texttt{seq} sea
+        $x+2$. Ese número solo lo puede usar el cliente después de recibir el
+        \texttt{SYN+ACK}, así que confirma que el handshake terminó. Si el segmento trae
+        datos (o es un \texttt{FIN}), no se descarta: se guarda en
+        \texttt{pending\_segments} del nuevo socket y es lo primero que procesa
+        \texttt{recv} (o \texttt{recv\_close}), que lo confirma con su \texttt{ACK}.
+  \item \textbf{Reenvío del \texttt{ACK} en \texttt{send} y \texttt{recv}.} Si el
+        cliente recibe un \texttt{SYN+ACK} repetido mientras espera un \texttt{ACK} de
+        datos (o mientras espera datos), reenvía el \texttt{ACK seq=x+2} del handshake.
+        Esto cubre el caso en que el cliente llama a \texttt{recv} en vez de
+        \texttt{send} y nunca enviaría un segmento que sirva como ACK implícito.
+\end{enumerate}
+
+\textbf{Test.} En las pruebas con \texttt{netem} (sección~\ref{sec:netem}) el ACK
+implícito se usó en 4 de 30 ejecuciones y el reenvío del \texttt{ACK} ante un
+\texttt{SYN+ACK} repetido en 3. En la primera de estas ejecuciones, el \texttt{ACK} final
+del handshake no llegó y el cliente pasó directamente a \texttt{send}. El servidor, que
+seguía en \texttt{accept}, completó el handshake al recibir el primer segmento de datos
+(\texttt{seq=12}, que es $x+2$):
+
+\begin{lstlisting}
+# cliente
+(debug) Enviando [SYN seq=10] a ('localhost', 9265)
+(debug) Recibido [SYN+ACK seq=11] desde ('127.0.0.1', 9266), enviando ACK seq=12
+(debug) Enviando [DATA seq=12 data=b'304']
+# servidor
+(debug) Recibido [SYN seq=10] desde ('127.0.0.1', 58672)
+(debug) Enviando [SYN+ACK seq=11] desde ('localhost', 9266)
+(debug) Recibido [DATA seq=12 data=b'304'] sin ACK previo, se asume el ACK perdido
+(debug) Recibido [DATA seq=12 data=b'304'], enviando ACK seq=15
+\end{lstlisting}
+
+En otra ejecución, el servidor alcanzó a retransmitir el \texttt{SYN+ACK} antes de que
+llegaran datos. El cliente, que ya estaba en \texttt{send}, lo reconoció como repetido y
+reenvió el \texttt{ACK} del handshake, con lo que el servidor terminó \texttt{accept}:
+
+\begin{lstlisting}
+# cliente
+(debug) Recibido [SYN+ACK seq=51] desde ('127.0.0.1', 9356), enviando ACK seq=52
+(debug) Enviando [DATA seq=52 data=b'16']
+(debug) Recibido [SYN+ACK seq=51] repetido, reenviando ACK del handshake
+# servidor
+(debug) Enviando [SYN+ACK seq=51] desde ('localhost', 9356)
+(debug) Timeout esperando ACK del handshake, retransmitiendo SYN+ACK
+(debug) Enviando [SYN+ACK seq=51] desde ('localhost', 9356)
+(debug) Recibido [ACK seq=52], handshake completo
+\end{lstlisting}
+
+\subsection{Paso 8: cierre con pérdidas}
+
+\begin{itemize}[nosep]
+  \item \texttt{close()}: si no llega el \texttt{FIN+ACK} antes del timeout, reenvía el
+        \texttt{FIN} y renueva el timeout, hasta 3 timeouts. Si se cumple el tercero,
+        asume que la contraparte cerró y cierra el socket. Si recibe el \texttt{FIN+ACK},
+        envía el último \texttt{ACK} 3 veces, esperando un timeout entre envíos.
+  \item \texttt{recv\_close()}: después de enviar el \texttt{FIN+ACK} espera el último
+        \texttt{ACK}; si no llega, reenvía el \texttt{FIN+ACK}, hasta 3 timeouts. Después
+        del tercero asume que la contraparte cerró. Mientras espera el \texttt{FIN},
+        también reenvía el \texttt{ACK} de cualquier segmento de datos duplicado, porque
+        el emisor puede seguir retransmitiendo el último segmento si se perdió su
+        \texttt{ACK}.
+\end{itemize}
+
+\textbf{Test.} En una ejecución con \texttt{netem} ninguno de los tres \texttt{FIN+ACK}
+llegó al cliente; ambos lados terminaron igual de cerrar la conexión:
+
+\begin{lstlisting}
+# cliente (close)                            # servidor (recv_close)
+(debug) Enviando [FIN seq=363]                (debug) Recibido [FIN seq=363]
+(debug) Timeout 1/3 esperando FIN+ACK         (debug) Enviando [FIN+ACK seq=364]
+(debug) Enviando [FIN seq=363]                (debug) Timeout 1/3 esperando el último ACK
+(debug) Timeout 2/3 esperando FIN+ACK         (debug) Enviando [FIN+ACK seq=364]
+(debug) Enviando [FIN seq=363]                (debug) Timeout 2/3 esperando el último ACK
+(debug) Timeout 3/3 esperando FIN+ACK         (debug) Enviando [FIN+ACK seq=364]
+(debug) No llegó FIN+ACK, se asume            (debug) Timeout 3/3 esperando el último ACK
+        que la contraparte cerró              (debug) No llegó el último ACK, se asume
+                                                      que la contraparte cerró
+\end{lstlisting}
+
+\section{Pruebas}
+
+\subsection{Pérdidas con \texttt{netem}}
+\label{sec:netem}
+
+Las pruebas con pérdida se hicieron con \texttt{netem}, con la configuración del
+enunciado:
+
+\begin{lstlisting}
+% sudo tc qdisc add dev lo root netem loss 20.0% delay 0.5s
+% python3 servidor.py localhost 8000 > recibido.txt
+% python3 cliente.py localhost 8000 < archivo.txt
+% cmp archivo.txt recibido.txt
+% sudo tc qdisc del dev lo root netem
+\end{lstlisting}
+
+Con el delay de 0,5 s en cada sentido, el RTT en \texttt{localhost} es de 1 s (medido con
+\texttt{ping}), menor que el timeout de 1,5 s. Cada prueba se repitió 15 veces:
+
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+  \toprule
+  Prueba (\texttt{netem}: 20\% de pérdida, delay 0,5 s) & Ejecuciones exitosas & Criterio \\
+  \midrule
+  \texttt{cliente.py} / \texttt{servidor.py} con \texttt{archivo.txt} & 15/15 & \texttt{cmp} idéntico y ambos terminan \\
+  \texttt{test\_cliente.py} / \texttt{test\_servidor.py} & 15/15 & 4 de 4 tests \texttt{Passed} \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Cada envío del archivo tomó entre 20 y 43 segundos. En las 30 ejecuciones hubo 257
+timeouts esperando ACKs de datos y el receptor recibió 120 segmentos duplicados. En el
+handshake, el cliente retransmitió el \texttt{SYN} 15 veces y el servidor el
+\texttt{SYN+ACK} 13 veces. El ACK implícito se usó 4 veces, el reenvío del \texttt{ACK}
+ante un \texttt{SYN+ACK} repetido 3 veces, y los cierres por 3 timeouts ocurrieron 2
+veces en cada lado.
+
+\subsection{Envío de un archivo con pérdidas}
+
+Este extracto del debug de una de las ejecuciones con \texttt{netem} muestra los dos
+tipos de pérdida de Stop \& Wait. \texttt{netem} no informa qué segmento se perdió, pero
+se deduce del lado del servidor. El segmento \texttt{seq=16} llegó una sola vez, así que
+se perdió su primera transmisión y el emisor lo retransmitió al cumplirse el timeout. El
+segmento \texttt{seq=64} llegó dos veces, así que lo que se perdió fue su
+\texttt{ACK}: el receptor descartó el duplicado y reenvió el \texttt{ACK}.
+
+\begin{lstlisting}
+# cliente
+(debug) Enviando [DATA seq=16 data=b'Redes CC4303 - A']
+(debug) Timeout esperando ACK seq=32, retransmitiendo
+(debug) Enviando [DATA seq=16 data=b'Redes CC4303 - A']
+...
+(debug) Enviando [DATA seq=64 data=b'vo tiene bastant']
+(debug) Timeout esperando ACK seq=80, retransmitiendo
+(debug) Enviando [DATA seq=64 data=b'vo tiene bastant']
+# servidor
+(debug) Recibido [DATA seq=16 data=b'Redes CC4303 - A'], enviando ACK seq=32
+...
+(debug) Recibido [DATA seq=64 data=b'vo tiene bastant'], enviando ACK seq=80
+(debug) Recibido [DATA seq=64 data=b'vo tiene bastant'] duplicado, reenviando ACK seq=80
+\end{lstlisting}
+
+\subsection{\texttt{recv} con \texttt{buff\_size < message\_length}}
+
+A los tests del enunciado se agregó el test 4: se envía un mensaje de $2n = 42$ bytes y
+se llama dos veces a \texttt{recv(n)} con $n = 21$, que no es múltiplo de 16. La primera
+llamada recibe dos segmentos (32 bytes), retorna 21 y deja 11 en \texttt{recv\_buffer}.
+La segunda usa esos 11 bytes y recibe el último segmento de 10. El test 3 cubre el mismo
+caso con $n = 14$.
+
+\begin{lstlisting}
+Test 1 received: b'Mensje de len=16'
+Test 1: Passed
+Test 2 received: b'Mensaje de largo 19'
+Test 2: Passed
+Test 3 received: b'Mensaje de largo 19'
+Test 3: Passed
+Test 4 received: b'Primera mitad de 21 b' b'Segunda mitad de 21 b'
+Test 4: Passed
+Conexión cerrada
+\end{lstlisting}
+
+\section{Casos borde y limitaciones}
+
+\begin{itemize}
+  \item \textbf{Se pierden los 3 \texttt{FIN}.} \texttt{close()} asume que la contraparte
+        cerró, pero \texttt{recv\_close()} espera el \texttt{FIN} sin timeout y queda
+        bloqueada. El enunciado solo exige que el cierre funcione siempre desde el lado
+        que llama a \texttt{close()} y, en la contraparte, una vez que recibe un
+        \texttt{FIN}. Con el 20\% de pérdida de \texttt{netem}, la probabilidad de este caso
+        es $0{,}2^3 = 0{,}8\%$ por cierre. No ocurrió en las pruebas con \texttt{netem}.
+  \item \textbf{Se pierden los 3 últimos \texttt{ACK} del cierre.} \texttt{recv\_close()}
+        termina igual después de 3 timeouts.
+  \item \textbf{Se pierde el último \texttt{ACK} de datos antes del cierre.} El emisor
+        retransmite el segmento mientras el receptor ya está en \texttt{recv\_close()};
+        este reenvía el \texttt{ACK} y el emisor sigue normalmente con \texttt{close()}.
+  \item \textbf{\texttt{SYN} retransmitidos.} Quedan en el socket que escucha y se
+        ignoran porque la conexión ya fue aceptada.
+  \item \textbf{Handshake y envío de datos sin límite de reintentos.} \texttt{connect},
+        \texttt{accept} y \texttt{send} retransmiten indefinidamente. Si la contraparte
+        deja de existir, quedan esperando para siempre.
+  \item \textbf{El timeout se reinicia con cada segmento recibido.} Con
+        \texttt{settimeout}, el plazo vuelve a empezar cada vez que \texttt{recvfrom}
+        recibe algo, aunque no sea el \texttt{ACK} esperado. Si llegaran segmentos
+        inesperados de forma continua, la retransmisión se atrasaría. En la práctica solo
+        llegan algunos duplicados, por lo que el efecto es despreciable.
+  \item \textbf{Timeout fijo.} El timeout no se adapta al RTT. Si el RTT supera 1,5
+        segundos, habría retransmisiones innecesarias. Aun así la transferencia sería
+        correcta, porque los duplicados se descartan por número de secuencia.
+  \item \textbf{\texttt{buff\_size} del servidor.} \texttt{servidor.py} llama una vez a
+        \texttt{recv} con un \texttt{buff\_size} de 1~MiB, por lo que recibe el archivo
+        completo si mide menos que eso.
+  \item \textbf{Mensaje de largo 0.} \texttt{send(b"")} envía solo el segmento con el
+        largo \texttt{b'0'} y \texttt{recv} retorna \texttt{b""}.
+\end{itemize}
+
+\section*{Declaración de uso de IA}
+
+En este informe se utilizó el modelo de IA Claude exclusivamente como apoyo en la
+revisión del código, recomendaciones de diseño, la redacción del informe, la creación de
+las tablas y la elaboración de los gráficos y diagramas en \LaTeX{}. Las decisiones de
+diseño, la implementación del código, la ejecución de los experimentos y la obtención de
+los datos fueron realizadas por el autor. Todo el contenido generado con apoyo de la
+herramienta fue revisado y validado, y su responsabilidad es del autor.
+
+\end{document}
