@@ -1,0 +1,300 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage{spectral}
+\usepackage[margin=2.5cm,headheight=48pt,headsep=18pt]{geometry}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\usetikzlibrary{positioning}
+
+\newcommand{\curso}{CC4303-1 Redes}
+\newcommand{\tituloinforme}{Actividad: Forwarding básico}
+
+\renewcommand{\sectionmark}[1]{\markboth{#1}{}}
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+\setlength{\emergencystretch}{3em}
+
+% Cabecera y pie de página con el mismo estilo del informe de práctica.
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\leftmark}
+\fancyfoot[L]{\small Informe \tituloinforme}
+\fancyfoot[R]{\small CC4303-1}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+\fancypagestyle{portada}{%
+  \fancyhf{}
+  \fancyhead[L]{\small\begin{tabular}[b]{@{}l@{}}
+    Universidad de Chile\\
+    Facultad de Ciencias Físicas y Matemáticas\\
+    Departamento de Ciencias de la Computación\\
+    \curso
+  \end{tabular}}
+  \fancyhead[R]{\includegraphics[height=1.3cm]{logo_fcfm.png}}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+
+\definecolor{fondocodigo}{gray}{0.96}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{fondocodigo},
+  frame=single,
+  rulecolor=\color{gray!50},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {Á}{{\'A}}1 {ñ}{{\~n}}1
+}
+
+% Diagramas de red: routers como nodos y enlaces como líneas.
+\tikzset{
+  router/.style={circle,draw,thick,minimum size=8mm,font=\small},
+  default/.style={rectangle,draw,thick,rounded corners,minimum size=8mm,font=\small,fill=gray!10},
+  link/.style={thick,<->,>=stealth},
+}
+
+\begin{document}
+
+\begin{titlepage}
+  \thispagestyle{portada}
+  \centering
+  \vspace*{5cm}
+  {\LARGE Informe\par}
+  \vspace{0.3cm}
+  {\Large \tituloinforme\par}
+  \vspace{0.4cm}
+  {\large Juan Pablo Bustamante Flaño\par}
+  \vfill
+  Correo electrónico: juan.bustamante.f@ug.uchile.cl\\
+  Curso: \curso{} --- Primavera 2026\\
+  Profesora: Ivana Bachmann\\
+  Módulo 4: Redes y Ruteo, semanas 11-12\\
+  Fecha: 18/11/2026
+  \vspace*{3cm}
+\end{titlepage}
+
+\section{Introducción}
+
+Se simuló un mini-Internet en la capa de red: cada router es un proceso con un socket UDP
+en (127.0.0.1, puerto) y una tabla de rutas en un archivo. Si un paquete va dirigido al
+router, este imprime el mensaje; si no, lo reenvía según su tabla. El código final (con
+TTL) está en \texttt{actividades/Forwarding}: \texttt{router.py}, \texttt{enviar.py},
+\texttt{prueba\_router.py} y las tablas en \texttt{rutas/}. Las pruebas de la parte I se
+hicieron con la versión intermedia sin TTL.
+
+\section{Parte I: mini-Internet sin TTL}
+
+\subsection{Tabla de rutas simulada versus real}
+
+\textbf{Similitudes:} ambas asocian una red de destino (en notación CIDR) con un siguiente
+salto, se consultan para cada paquete y descartan el paquete si ninguna ruta coincide.
+
+\textbf{Diferencias:}
+\begin{itemize}[nosep]
+  \item En la simulación todos los routers comparten la IP \texttt{127.0.0.1} y las redes
+        se distinguen por rangos de puertos; en una red real se distinguen por IP.
+  \item La simulación usa la primera línea que coincide; una tabla real usa el prefijo
+        más largo.
+  \item Una tabla real incluye interfaz de salida y métrica, y se actualiza con protocolos
+        de ruteo; la simulada es un archivo estático.
+\end{itemize}
+
+\subsection{Header y script de envío}
+
+El header usa 4 bytes para la IP (uno por número), 2 bytes para el puerto y luego el
+mensaje. \texttt{enviar.py} recibe la información por \texttt{sys.argv}: el destino final
+en formato \texttt{IP;puerto} (en la parte II, \texttt{IP;puerto;TTL}), el mensaje y la
+dirección a la que se envía el paquete:
+
+\begin{lstlisting}
+% python3 enviar.py "127.0.0.1;8885;10" "hola R5" 127.0.0.1 8881
+\end{lstlisting}
+
+El primer argumento va entre comillas porque en \texttt{bash} el \texttt{;} separa
+comandos.
+
+\subsection{Round-robin}
+
+\texttt{check\_routes} revisa la tabla en orden. La primera línea que contiene al destino
+define el \emph{área} de la red, dada por (red, puerto inicial, puerto final), y todas las
+líneas con esa misma área son rutas alternativas. Un diccionario global guarda, para cada
+área, el índice de la próxima ruta a usar, que avanza de forma circular con cada paquete.
+Así cada área tiene su propio contador, para cualquier cantidad de rutas.
+
+\subsection{Router default}
+
+La ruta default debe ir en la \textbf{última línea}: la tabla se revisa en orden y la ruta
+default coincide con cualquier destino, así que en cualquier otra posición taparía las
+rutas que están debajo. Las tablas quedan así (ejemplo de R2):
+
+\begin{lstlisting}
+# rutas_R2_v5.txt
+127.0.0.1/24 8881 8881 127.0.0.1 8881
+127.0.0.1/24 8883 8885 127.0.0.1 8883
+127.0.0.1/24 8883 8885 127.0.0.1 8884
+0.0.0.0/0 0 65535 127.0.0.1 7000
+\end{lstlisting}
+
+Un paquete enviado desde R1 al puerto 9000, que no pertenece a la red, llegó al router
+default:
+
+\begin{lstlisting}
+redirigiendo paquete 127.0.0.1;9000;fuera de la red con destino final ('127.0.0.1', 9000) desde ('127.0.0.1', 8881) hacia ('127.0.0.1', 7000)
+\end{lstlisting}
+
+\section{Pruebas sin TTL}
+
+\subsection{Tabla de rutas mal configurada}
+
+Con la tabla de R2 indicada en el enunciado, un paquete de R1 a R3 queda rebotando entre
+R1 y R2 para siempre: en 2 segundos hubo casi 78\,000 reenvíos y el paquete nunca llegó a
+R3. Un solo error de configuración genera un ciclo infinito que ocupa a los routers y al
+enlace indefinidamente.
+
+\subsection{Saltos con round-robin (5 routers)}
+
+Se enviaron 12 paquetes de R1 a R5, de a uno:
+
+\begin{lstlisting}
+p01:  7 saltos  R1 -> R2 -> R3 -> R2 -> R4 -> R2 -> R3 -> R5
+p02:  3 saltos  R1 -> R2 -> R4 -> R5
+...   (el patrón se repite)
+\end{lstlisting}
+
+Los paquetes no siempre dan los mismos saltos: alternan entre 7 y 3, cuando el mínimo es 3.
+El round-robin no considera la distancia, y por eso R3 a veces devuelve el paquete a R2.
+
+\subsection{Saltos con round-robin (7 routers)}
+
+Se agregaron R0 (8880), conectado a R1 y R2, y R6 (8886), conectado a R2 y R3
+(figura~\ref{fig:v4}). Al intercalar paquetes de R1 a R5 y de R5 a R1, R2 cicló
+correctamente dentro de cada área: R3 $\rightarrow$ R4 $\rightarrow$ R6 hacia R5, y
+R0 $\rightarrow$ R1 hacia R1. Los caminos variaron entre 3 y 11 saltos, y solo 3 de 12
+paquetes usaron el mínimo (3 saltos). Algunos pasaron varias veces por el mismo router.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=1.8cm]
+  \node[router] (r1) {R1};
+  \node[router,right=of r1] (r2) {R2};
+  \node[router,right=of r2] (r3) {R3};
+  \node[router,below=1.2cm of r2] (r4) {R4};
+  \node[router,below=1.2cm of r3] (r5) {R5};
+  \node[router,above=1.2cm of r1,xshift=1.4cm] (r0) {R0};
+  \node[router,above=1.2cm of r2,xshift=1.4cm] (r6) {R6};
+  \foreach \a/\b in {r1/r2,r2/r3,r2/r4,r3/r5,r4/r5,r0/r1,r0/r2,r6/r2,r6/r3}
+    \draw[link] (\a) -- (\b);
+\end{tikzpicture}
+\caption{Red de 7 routers.}
+\label{fig:v4}
+\end{figure}
+
+\begin{lstlisting}
+# rutas_R0_v4.txt
+127.0.0.1/24 8881 8886 127.0.0.1 8881
+127.0.0.1/24 8881 8886 127.0.0.1 8882
+# rutas_R1_v4.txt
+127.0.0.1/24 8880 8880 127.0.0.1 8880
+127.0.0.1/24 8882 8886 127.0.0.1 8882
+127.0.0.1/24 8882 8886 127.0.0.1 8880
+# rutas_R2_v4.txt
+127.0.0.1/24 8880 8881 127.0.0.1 8880
+127.0.0.1/24 8880 8881 127.0.0.1 8881
+127.0.0.1/24 8883 8886 127.0.0.1 8883
+127.0.0.1/24 8883 8886 127.0.0.1 8884
+127.0.0.1/24 8883 8886 127.0.0.1 8886
+# rutas_R3_v4.txt
+127.0.0.1/24 8880 8882 127.0.0.1 8882
+127.0.0.1/24 8880 8882 127.0.0.1 8886
+127.0.0.1/24 8884 8885 127.0.0.1 8882
+127.0.0.1/24 8884 8885 127.0.0.1 8885
+127.0.0.1/24 8886 8886 127.0.0.1 8886
+# rutas_R4_v4.txt
+127.0.0.1/24 8880 8883 127.0.0.1 8882
+127.0.0.1/24 8880 8883 127.0.0.1 8885
+127.0.0.1/24 8885 8886 127.0.0.1 8882
+127.0.0.1/24 8885 8886 127.0.0.1 8885
+# rutas_R5_v4.txt
+127.0.0.1/24 8880 8884 127.0.0.1 8884
+127.0.0.1/24 8880 8884 127.0.0.1 8883
+127.0.0.1/24 8886 8886 127.0.0.1 8883
+# rutas_R6_v4.txt
+127.0.0.1/24 8880 8882 127.0.0.1 8882
+127.0.0.1/24 8880 8882 127.0.0.1 8883
+127.0.0.1/24 8883 8885 127.0.0.1 8883
+127.0.0.1/24 8883 8885 127.0.0.1 8882
+\end{lstlisting}
+
+\section{Parte II: mini-Internet con TTL}
+
+El TTL se agregó como 1 byte después del puerto (header de 7 bytes). El router descarta
+los paquetes que llegan con TTL 0 y, antes de reenviar uno, le resta 1. Con TTL 1 de R1 a
+R3, R1 reenvió el paquete con TTL 0 y R2 lo descartó:
+
+\begin{lstlisting}
+Se recibió paquete 127.0.0.1;8883;0;hola con TTL 0
+\end{lstlisting}
+
+\texttt{create\_packet} retorna \texttt{bytes}, no \texttt{str} como supone el test del
+enunciado, porque el header en bytes no siempre es texto UTF-8 válido. Para enviar un
+archivo línea por línea:
+
+\begin{lstlisting}
+% python3 prueba_router.py "127.0.0.1;8885;10" 127.0.0.1 8881 < archivo.txt
+\end{lstlisting}
+
+\section{Pruebas con TTL}
+
+\subsection{Tabla de rutas mal configurada}
+
+Con TTL 10 el paquete sigue sin llegar a R3, pero el ciclo ya no es infinito: después de
+10 reenvíos R1 lo recibe con TTL 0 y lo descarta. El TTL no corrige el error de
+configuración, pero evita que el paquete quede circulando para siempre.
+
+\subsection{Orden de los paquetes}
+
+Se envió un archivo de 40 líneas de R1 a R5 con TTL 10. R5 recibió 37 líneas, en desorden:
+
+\begin{lstlisting}
+03 04 07 08 01 11 13 14 16 06 18 19 21 12 23 24 26 27 29 30 09 32 10 35 37 38 40
+02 15 28 33 34 22 39 17 36 25
+\end{lstlisting}
+
+Por el round-robin, cada paquete toma un camino distinto, de entre 3 y 9 saltos, y los que
+toman caminos cortos adelantan a los demás. Las líneas 05, 20 y 31 superaron los 9
+reenvíos y se descartaron por TTL. Igual que IP, la red no garantiza ni el orden ni la
+entrega de los paquetes.
+
+\section{Casos borde}
+
+\begin{itemize}[nosep]
+  \item Como el TTL se revisa antes de ver el destino, un paquete que llega a su destino
+        con TTL 0 también se descarta. Para llegar a $k$ saltos se necesita TTL $\geq k+1$.
+  \item El router compara el destino con la IP recibida como argumento, así que debe
+        iniciarse con \texttt{127.0.0.1} y no con \texttt{localhost}.
+\end{itemize}
+
+\section*{Declaración de uso de IA}
+
+En este informe se utilizó el modelo de IA Claude exclusivamente como apoyo en la
+revisión del código, recomendaciones de diseño, la redacción del informe y la
+elaboración del diagrama en \LaTeX{}. Las decisiones de
+diseño, la implementación del código, la ejecución de los experimentos y la obtención de
+los datos fueron realizadas por el autor. Todo el contenido generado con apoyo de la
+herramienta fue revisado y validado, y su responsabilidad es del autor.
+
+\end{document}

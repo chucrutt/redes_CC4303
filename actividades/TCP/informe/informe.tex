@@ -104,7 +104,6 @@ segmentos en ambas direcciones.
   \midrule
   \texttt{SocketTCP.py} & Clase \texttt{SocketTCP} y constantes de configuración. \\
   \texttt{cliente.py}, \texttt{servidor.py} & Cliente y servidor de entrega. \\
-  \texttt{cliente\_udp.py}, \texttt{servidor\_udp.py} & Programas provisorios de los pasos 1 y 3. \\
   \texttt{test\_cliente.py}, \texttt{test\_servidor.py} & Pruebas de \texttt{send}, \texttt{recv} y cierre. \\
   \texttt{archivo.txt} & Archivo de prueba. \\
   \bottomrule
@@ -126,9 +125,10 @@ recibido con el original usando \texttt{cmp}.
 
 \subsection{Paso 1: cliente y servidor provisorios}
 
-\texttt{cliente\_udp.py} pide la ruta del archivo con \texttt{input()}, lo carga completo
-en memoria y lo envía a \texttt{(localhost, 8000)} en trozos de a lo más 16 bytes.
-\texttt{servidor\_udp.py} recibe los trozos e imprime su contenido. Como todavía no se
+El cliente provisorio pide la ruta del archivo con \texttt{input()}, lo carga completo
+en memoria y lo envía a \texttt{(localhost, 8000)} en trozos de a lo más 16 bytes. El
+servidor provisorio recibe los trozos e imprime su contenido. Como indica el enunciado,
+estos programas no forman parte de la entrega final. Como todavía no se
 conoce el largo del mensaje, el servidor se queda esperando más mensajes una vez que
 recibió todo.
 
@@ -140,7 +140,6 @@ enunciado:
 
 \begin{lstlisting}
 % sudo tc qdisc add dev lo root netem loss 20.0% delay 0.5s
-% echo archivo.txt | python3 cliente_udp.py
 \end{lstlisting}
 
 El servidor imprimió un texto con fragmentos faltantes (por ejemplo, desde
@@ -185,9 +184,9 @@ Al comienzo de \texttt{SocketTCP.py} se definen como variables globales el timeo
 0.5s}) y el modo debug (\texttt{DEBUG = True}, que imprime en \texttt{stderr} cada
 segmento, timeout y retransmisión).
 
-Para el test, el cliente y el servidor provisorios aceptan la opción
-\texttt{-{}-headers}: el cliente encapsula cada trozo con \texttt{create\_segment} y el
-servidor extrae los datos con \texttt{parse\_segment}. El servidor rearmó el archivo
+Para el test se modificaron el cliente y el servidor provisorios: el cliente encapsula
+cada trozo con \texttt{create\_segment} y el servidor extrae los datos con
+\texttt{parse\_segment}. El servidor rearmó el archivo
 completo, igual que en el test 1.
 
 \subsection{Paso 4: 3-way handshake}

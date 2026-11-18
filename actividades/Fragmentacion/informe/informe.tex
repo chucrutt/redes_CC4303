@@ -1,0 +1,234 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage{spectral}
+\usepackage[margin=2.5cm,headheight=48pt,headsep=18pt]{geometry}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\usetikzlibrary{positioning}
+
+\newcommand{\curso}{CC4303-1 Redes}
+\newcommand{\tituloinforme}{Actividad: Fragmentación}
+
+\renewcommand{\sectionmark}[1]{\markboth{#1}{}}
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+\setlength{\emergencystretch}{3em}
+
+% Cabecera y pie de página con el mismo estilo del informe de práctica.
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\leftmark}
+\fancyfoot[L]{\small Informe \tituloinforme}
+\fancyfoot[R]{\small CC4303-1}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+\fancypagestyle{portada}{%
+  \fancyhf{}
+  \fancyhead[L]{\small\begin{tabular}[b]{@{}l@{}}
+    Universidad de Chile\\
+    Facultad de Ciencias Físicas y Matemáticas\\
+    Departamento de Ciencias de la Computación\\
+    \curso
+  \end{tabular}}
+  \fancyhead[R]{\includegraphics[height=1.3cm]{logo_fcfm.png}}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+
+\definecolor{fondocodigo}{gray}{0.96}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{fondocodigo},
+  frame=single,
+  rulecolor=\color{gray!50},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {Á}{{\'A}}1 {ñ}{{\~n}}1
+}
+
+% Diagramas de red: routers como nodos y enlaces como líneas.
+\tikzset{
+  router/.style={circle,draw,thick,minimum size=8mm,font=\small},
+  default/.style={rectangle,draw,thick,rounded corners,minimum size=8mm,font=\small,fill=gray!10},
+  link/.style={thick,<->,>=stealth},
+}
+
+\begin{document}
+
+\begin{titlepage}
+  \thispagestyle{portada}
+  \centering
+  \vspace*{5cm}
+  {\LARGE Informe\par}
+  \vspace{0.3cm}
+  {\Large \tituloinforme\par}
+  \vspace{0.4cm}
+  {\large Juan Pablo Bustamante Flaño\par}
+  \vfill
+  Correo electrónico: juan.bustamante.f@ug.uchile.cl\\
+  Curso: \curso{} --- Primavera 2026\\
+  Profesora: Ivana Bachmann\\
+  Módulo 4: Redes y Ruteo, semanas 11-12\\
+  Fecha: 18/11/2026
+  \vspace*{3cm}
+\end{titlepage}
+
+\section{Introducción}
+
+Se agregó fragmentación al mini-Internet de la actividad de forwarding básico (versión con
+TTL). Cada enlace tiene un MTU: si un paquete no cabe, el router lo divide en fragmentos, y
+el router de destino los re-ensambla antes de imprimir el mensaje. El código está en
+\texttt{actividades/Fragmentacion} y se probó con la red de 5 routers y los MTU del
+enunciado (figura~\ref{fig:red}).
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=2.2cm]
+  \node[router] (r1) {R1};
+  \node[router,right=of r1] (r2) {R2};
+  \node[router,right=of r2] (r3) {R3};
+  \node[router,below=1.4cm of r2] (r4) {R4};
+  \node[router,below=1.4cm of r3] (r5) {R5};
+  \draw[link] (r1) -- node[above,font=\footnotesize] {100} (r2);
+  \draw[link] (r2) -- node[above,font=\footnotesize] {50} (r3);
+  \draw[link] (r2) -- node[left,font=\footnotesize] {80} (r4);
+  \draw[link] (r3) -- node[right,font=\footnotesize] {55} (r5);
+  \draw[link] (r4) -- node[below,font=\footnotesize] {140} (r5);
+\end{tikzpicture}
+\caption{Red de 5 routers con el MTU de cada enlace (bytes).}
+\label{fig:red}
+\end{figure}
+
+\section{Diseño}
+
+\textbf{Header (20 bytes).} IP (4), puerto (2), TTL (1), ID (4), offset (4), tamaño (4) y
+FLAG (1), seguidos del mensaje. El ID y el offset usan 4 bytes porque el tamaño también usa
+4 bytes, así que el offset debe poder indicar cualquier posición del mensaje. El FLAG usa un
+byte completo con valor 0 o 1, que es más simple de leer y escribir que un bit suelto.
+
+\textbf{Rutas.} \texttt{check\_routes} lee el MTU de la sexta columna de la tabla y retorna
+\texttt{(next\_hop, MTU)}. Las líneas de la tabla de R5 del enunciado no traen el prefijo
+\texttt{/24}; en ese caso la red se interpreta como una sola IP (\texttt{/32}).
+
+\textbf{Fragmentación.} Si el paquete completo mide más que el MTU, el mensaje se divide
+en trozos de \texttt{MTU - 20} bytes. El offset de cada fragmento se calcula respecto al
+datagrama original, y el FLAG es 1 en todos los trozos menos el último, que conserva el
+FLAG del paquete fragmentado. Así, al fragmentar un fragmento intermedio, su último trozo
+mantiene FLAG 1.
+
+\textbf{Re-ensamblaje.} Un paquete sin fragmentar tiene offset 0 y FLAG 0; cualquier otro
+caso es un fragmento. \texttt{reassemble\_IP\_packet} ordena los fragmentos por offset,
+toma el largo total del fragmento con FLAG 0 y concatena los mensajes. Retorna
+\texttt{None} si falta un trozo. El router guarda en un diccionario, por ID, los fragmentos
+dirigidos a él, intenta re-ensamblar con cada fragmento que llega y borra el ID cuando lo
+logra.
+
+\textbf{Tests de las funciones.} El header vuelve igual después de \texttt{parse\_packet}
+y \texttt{create\_packet}. Un paquete de 150 bytes se divide en 2 fragmentos con MTU 100 y
+en 5 con MTU 50, y \texttt{reassemble\_IP\_packet} lo recupera completo, incluso si los
+fragmentos vienen desordenados o fueron re-fragmentados. Al enviar a mano a R5 los
+fragmentos de dos paquetes con distinto ID, en orden, en desorden e intercalados, ambos
+mensajes se re-ensamblaron correctamente.
+
+\section{Pruebas}
+
+Los paquetes se enviaron con \texttt{enviar.py}, que recibe todos los campos del header. No
+se usó \texttt{netcat}, porque el header en bytes no se puede escribir como texto:
+
+\begin{lstlisting}
+% python3 enviar.py "127.0.0.1;8885;10;347;0;5;0" "hola!" 127.0.0.1 8881
+\end{lstlisting}
+
+\subsection{TTL y round-robin}
+
+El paquete \texttt{hola!} se envió 4 veces de R1 a R5. Los 4 llegaron, el TTL bajó en 1 en
+cada salto, y R2 siguió alternando entre R3 y R4:
+
+\begin{lstlisting}
+redirigiendo paquete 127.0.0.1;8885;8;347;0;5;0;hola! ... hacia ('127.0.0.1', 8883)
+redirigiendo paquete 127.0.0.1;8885;6;347;0;5;0;hola! ... hacia ('127.0.0.1', 8884)
+\end{lstlisting}
+
+Los fragmentos también respetan el TTL: un paquete de 150 bytes enviado con TTL 2 se
+fragmentó en R1 y en R2, y R3 y R4 descartaron todos sus fragmentos al llegar con TTL 0.
+
+\subsection{Paquetes de 150 bytes}
+
+Se envió 4 veces un paquete de 150 bytes de R1 a R5, y luego desde otros routers. Este es
+el recorrido de uno de los envíos de R1 a R5:
+
+\begin{lstlisting}
+# R1 (enlace R1-R2 con MTU 100)
+  fragmentado en 2 fragmentos para el enlace con MTU 100:
+    127.0.0.1;8885;19;501;0;80;1;...
+    127.0.0.1;8885;19;501;80;50;0;...
+# R2: el fragmento de 100 bytes va hacia R3 (MTU 50) y se vuelve a fragmentar
+  fragmentado en 3 fragmentos para el enlace con MTU 50:
+    127.0.0.1;8885;18;501;0;30;1;...
+    127.0.0.1;8885;18;501;30;30;1;...
+    127.0.0.1;8885;18;501;60;20;1;...
+\end{lstlisting}
+
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+  \toprule
+  Origen $\rightarrow$ destino & Fragmentos recibidos & Re-ensamblados \\
+  \midrule
+  R1 $\rightarrow$ R5 & 4, 4, 4, 4 & 4/4 \\
+  R5 $\rightarrow$ R1 & 3, 3, 6, 6 & 4/4 \\
+  R3 $\rightarrow$ R1 & 5, 5, 5, 6 & 4/4 \\
+  R4 $\rightarrow$ R1 & 3, 3, 3, 3 & 4/4 \\
+  R2 $\rightarrow$ R5 & 5, 4, 5, 4 & 4/4 \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Observaciones.}
+\begin{itemize}[nosep]
+  \item Los 20 envíos se fragmentaron y re-ensamblaron correctamente.
+  \item El resultado depende del origen, porque cambian los MTU del camino. Por ejemplo,
+        desde R5 el primer enlace puede tener MTU 140 (2 trozos de 120 y 10 bytes) o
+        MTU 55 (trozos de 35 bytes), y por eso al destino llegaron 3 o 6 fragmentos.
+  \item Sí se re-fragmentan fragmentos: el de 100 bytes que sale de R1 se dividió en 3 al
+        entrar al enlace R2--R3 (MTU 50), y un trozo de 35 bytes de mensaje se dividió en
+        30 y 5 bytes. Los offsets siguen siendo relativos al datagrama original.
+  \item Cada fragmento pasa por el round-robin por separado, así que los fragmentos de un
+        mismo paquete toman caminos distintos (entre 3 y 9 saltos) y llegan desordenados.
+  \item Cada fragmento lleva su propio header de 20 bytes. En un enlace con MTU 50, el
+        paquete de 150 bytes se convierte en 5 fragmentos que suman 230 bytes.
+\end{itemize}
+
+\section{Limitaciones}
+
+\begin{itemize}[nosep]
+  \item Si se pierde un fragmento, el resto de los fragmentos de su ID queda guardado
+        indefinidamente en el diccionario, porque no hay un tiempo límite para
+        re-ensamblar.
+  \item Si el MTU es menor o igual a 20 bytes no queda espacio para datos, y el router
+        descarta el paquete con un aviso.
+\end{itemize}
+
+\section*{Declaración de uso de IA}
+
+En este informe se utilizó el modelo de IA Claude exclusivamente como apoyo en la
+revisión del código, recomendaciones de diseño, la redacción del informe, la creación de
+la tabla y la elaboración del diagrama en \LaTeX{}. Las decisiones de
+diseño, la implementación del código, la ejecución de los experimentos y la obtención de
+los datos fueron realizadas por el autor. Todo el contenido generado con apoyo de la
+herramienta fue revisado y validado, y su responsabilidad es del autor.
+
+\end{document}
